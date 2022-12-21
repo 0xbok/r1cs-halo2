@@ -11,7 +11,7 @@ use halo2_proofs::{
 struct R1CSConfig {
     a: Column<Advice>,
     b: Column<Advice>,
-    c: Column<Instance>,
+    c: Column<Instance>, // compiler warning: `c` is never read
 }
 
 #[derive(Debug, Clone)]
@@ -30,51 +30,28 @@ impl<F: FieldExt> R1CSChip<F> {
 }
 
 trait R1CSComposer<F: FieldExt> {
-    fn assign_a(
+    fn assign_advice(
         &self,
         layouter: &mut impl Layouter<F>,
-        a: Vec<F>
-    ) -> Result<(), Error>;
-
-    fn assign_b(
-        &self,
-        layouter: &mut impl Layouter<F>,
-        b: Vec<F>
+        a: F,
+        b: F,
     ) -> Result<(), Error>;
 }
 
 impl<F: FieldExt> R1CSComposer<F> for R1CSChip<F> {
 
-    fn assign_a(
+    fn assign_advice(
         &self,
         layouter: &mut impl Layouter<F>,
-        a: Vec<F>
+        a: F,
+        b: F,
     ) -> Result<(), Error>
     {
         layouter.assign_region(
-            || "sc",
+            || "a and b",
             |mut region| {
-                for i in 0..a.len() {
-                    region.assign_advice(|| "a", self.config.a, i, || Value::known(a[i]))?;
-                }
-                Ok(())
-            },
-        )
-    }
-
-    fn assign_b(
-        &self,
-        layouter: &mut impl Layouter<F>,
-        b: Vec<F>
-    ) -> Result<(), Error>
-    {
-        layouter.assign_region(
-            || "sc",
-            |mut region| {
-                for i in 0..b.len() {
-                    // @todo check if offset should be 0 or i.
-                    region.assign_advice(|| "b", self.config.b, i, || Value::known(b[i]))?;
-                }
+                    region.assign_advice(|| "a", self.config.a, 0, || Value::known(a))?;
+                    region.assign_advice(|| "b", self.config.b, 0, || Value::known(b))?;
                 Ok(())
             },
         )
@@ -93,18 +70,12 @@ impl<F: FieldExt> Circuit<F> for R1CSCircuit<F> {
     type FloorPlanner = SimpleFloorPlanner;
 
     fn without_witnesses(&self) -> Self {
-        Self::default()
+        R1CSCircuit { a: self.a.clone(), b: self.b.clone(), c: self.c.clone(), }
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
         let a = meta.advice_column();
         let b = meta.advice_column();
-
-        // meta.enable_equality(l);
-
-        // let is_hash = meta.fixed_column();
-        // let hash = meta.instance_column();
-
         let c = meta.instance_column();
         // meta.enable_equality(c);
 
@@ -126,11 +97,9 @@ impl<F: FieldExt> Circuit<F> for R1CSCircuit<F> {
     fn synthesize(&self, config: Self::Config, mut layouter: impl Layouter<F>) -> Result<(), Error> {
         let cs = R1CSChip::new(config);
 
-        // let a = self.a;
-        // let b = self.b;
-
-        cs.assign_a(&mut layouter, self.a.clone())?;
-        cs.assign_b(&mut layouter, self.b.clone())?;
+        for i in 0..self.a.len() {
+            cs.assign_advice(&mut layouter, self.a[i], self.b[i])?;
+        }
 
         Ok(())
     }
@@ -164,30 +133,29 @@ mod tests {
         assert_eq!(prover.verify(), Ok(()));
     }
 
-    // #[cfg(feature = "dev-graph")]
-    // #[test]
-    // fn plonk_layout() {
-    //     use plotters::prelude::*;
+    #[cfg(feature = "dev-graph")]
+    #[test]
+    fn r1cs_layout() {
+        use plotters::prelude::*;
 
-    //     let root = BitMapBackend::new("plonk-layout.png", (1024, 3096)).into_drawing_area();
-    //     root.fill(&WHITE).unwrap();
-    //     let root = root.titled("Plonk Layout", ("sans-serif", 60)).unwrap();
+        let root = BitMapBackend::new("r1cs-layout.png", (1024, 3096)).into_drawing_area();
+        root.fill(&WHITE).unwrap();
+        let root = root.titled("R1CS Layout", ("sans-serif", 60)).unwrap();
 
-    //     let circuit = R1CSCircuit::<Fp> {
-    //         x: Value::unknown(),
-    //         y: Value::unknown(),
-    //         constant: Fp::from(7),
-    //         constant_fixed: Fp::from(10),
-    //     };
-    //     halo2_proofs::dev::CircuitLayout::default()
-    //         .mark_equality_cells(true)
-    //         .show_equality_constraints(true)
-    //         .render(4, &circuit, &root)
-    //         .unwrap();
+        let circuit = R1CSCircuit::<Fp> {
+            a: vec![Fp::from(1), Fp::from(2)],//Value::unknown(), Value::unknown()],
+            b: vec![Fp::from(1), Fp::from(2)],//Value::unknown(), Value::unknown()],
+            c: vec![Fp::from(1), Fp::from(2)],//Value::unknown(), Value::unknown()],
+        };
+        halo2_proofs::dev::CircuitLayout::default()
+            // .mark_equality_cells(true)
+            // .show_equality_constraints(true)
+            .render(4, &circuit, &root)
+            .unwrap();
 
-    //     let dot_string = halo2_proofs::dev::circuit_dot_graph(&circuit);
-    //     println!("---{}---", dot_string); // --> bug: is empty
-    //     // let mut dot_graph = std::fs::File::create("circuit.dot").unwrap();
-    //     // std::io::Write::write_all(&mut dot_graph, dot_string.as_bytes()).unwrap();
-    // }
+        // let dot_string = halo2_proofs::dev::circuit_dot_graph(&circuit);
+        // println!("---{}---", dot_string); // --> bug: is empty
+        // let mut dot_graph = std::fs::File::create("circuit.dot").unwrap();
+        // std::io::Write::write_all(&mut dot_graph, dot_string.as_bytes()).unwrap();
+    }
 }
